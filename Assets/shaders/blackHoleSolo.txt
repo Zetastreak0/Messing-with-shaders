@@ -1,0 +1,36 @@
+#version 120
+
+uniform float time;
+uniform vec2 u_resolution;
+
+const float PI = 3.14159265;
+
+void main() {
+    // 1. Center the coordinates around (0,0) and correct for aspect ratio
+    float x = (gl_FragCoord.x - (u_resolution.x * 0.5)) / u_resolution.y;
+    float y = (gl_FragCoord.y - (u_resolution.y * 0.5)) / u_resolution.y;
+
+    // 2. Calculate the flat, exact distance from the center pixel to the core
+    float dist = length(vec2(x, y));
+
+    // 3. Create a sharp, solid black event horizon right in the center
+    float horizon_size = 0.08;
+    float core = smoothstep(horizon_size, horizon_size + 0.005, dist);
+
+        // 4. Calculate the polar angle of the current pixel (returns -PI to PI)
+    float angle = atan(y, x);
+
+    // 5. Generate a swirling spiral texture pattern
+    // As distance gets smaller, the angle twists tighter, and time pushes it forward
+    float spiral = sin(12.0 * dist - angle * 3.0 + time * 5.0);
+
+    // 6. Create the Accretion Disk Gas Glow
+    // Gas is brightest near the core and drops off smoothly over distance
+    float gas_glow = (0.04 / (dist + 0.01)) * (0.5 + 0.5 * spiral);
+
+    // 7. Paint the gas vibrant orange/gold and mask out the center core void
+    vec3 disk_color = vec3(gas_glow * 2.0, gas_glow * 1.0, gas_glow * 0.2) * core;
+
+    gl_FragColor = vec4(disk_color, 1.0);
+}
+

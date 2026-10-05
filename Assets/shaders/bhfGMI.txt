@@ -1,0 +1,66 @@
+#version 120
+
+uniform float time;
+uniform vec2 u_resolution;
+
+const float PI = 3.14159265;
+const float LOOP_ROTATIONS = 2.0;
+const float LOOP_DURATION = 6.0;
+
+void main() {
+    // 1. Standardize Coordinates (Centered, aspect-corrected)
+    float x = (gl_FragCoord.x - (u_resolution.x * 0.5)) / u_resolution.y;
+    float y = (gl_FragCoord.y - (u_resolution.y * 0.5)) / u_resolution.y;
+
+    // 2. Continuous 6-Second Loop Angles
+    float theta = ((2.0 * PI * LOOP_ROTATIONS) / LOOP_DURATION) * time; 
+    
+    // Smoothly calculated moving centers for two separate black holes
+    float radius = 0.25;
+    float bh1_x = cos(theta) * radius;
+    float bh1_y = sin(theta) * radius;
+    
+    float bh2_x = cos(theta + PI) * radius; // Directly opposite (180 degrees apart)
+    float bh2_y = sin(theta + PI) * radius;
+
+    // 3. Simple Perspective Simulation (Tilt the orbit plane backwards)
+    // Flatten Y slightly to give a 3D cinematic angle
+    y = y * 2.0; 
+
+    // 4. Calculate Distances to the Binary Black Holes
+    float dist1 = length(vec2(x - bh1_x, y - bh1_y));
+    float dist2 = length(vec2(x - bh2_x, y - bh2_y));
+
+    // 5. Generate the Swirling Accretion Disk (Vortex effect)
+    // Using a simple polar angle (atan) to make pixels look like they are spiraling
+    float angle1 = atan(y - bh1_y, x - bh1_x);
+    float angle2 = atan(y - bh2_y, x - bh2_x);
+
+    // Create stable, smooth spiral arms wrapping around both holes
+    float spiral1 = sin(15.0 * dist1 - angle1 * 3.0 + time * 4.0);
+    float spiral2 = sin(15.0 * dist2 - angle2 * 3.0 + time * 4.0);
+
+    // 6. Draw Sharp Event Horizons (The actual black holes)
+    float horizon_size = 0.05; // Slightly larger cores
+    float core1 = smoothstep(horizon_size, horizon_size + 0.01, dist1);
+    float core2 = smoothstep(horizon_size, horizon_size + 0.01, dist2);
+
+    // 7. Combine Everything into a Beautiful Cosmic Glow (BOOSTED INTENSITY)
+    // We increased the numerator from 0.02 to 0.08 to force the gas to glow brightly
+    float gas1 = (0.08 / (dist1 + 0.02)) * (0.5 + 0.5 * spiral1);
+    float gas2 = (0.08 / (dist2 + 0.02)) * (0.5 + 0.5 * spiral2);
+
+    // Add a vibrant central engine ambient glow that fades over distance
+    float center_glow = 0.015 / (length(vec2(x, y)) + 0.05);
+
+    // Pure black inside the cores, heavily amplified vibrant colors on the gas
+    vec3 color1 = vec3(gas1 * 1.5, gas1 * 0.3, gas1 * 1.8) * core1; // Vibrant Violet/Magenta
+    vec3 color2 = vec3(gas2 * 0.2, gas2 * 1.2, gas2 * 2.0) * core2; // Brilliant Neon Cyan
+    vec3 ambient = vec3(center_glow * 0.3, center_glow * 0.5, center_glow * 1.0);
+    
+    // Combine everything together
+    vec3 final_color = color1 + color2 + ambient;
+
+    gl_FragColor = vec4(final_color, 1.0);
+}
+

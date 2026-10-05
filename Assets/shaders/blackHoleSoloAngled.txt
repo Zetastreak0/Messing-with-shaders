@@ -1,0 +1,83 @@
+#version 120
+
+uniform float time;
+uniform vec2 u_resolution;
+
+const float PI = 3.14159265;
+
+void main() {
+    // 1. Center the coordinates around (0,0) and correct for aspect ratio
+    float x_raw = (gl_FragCoord.x - (u_resolution.x * 0.5)) / u_resolution.y;
+    float y_raw = (gl_FragCoord.y - (u_resolution.y * 0.5)) / u_resolution.y;
+
+    // 2. Clear, Modular 3D Distortion Controls
+    float squash_y   = 0.12; 
+    float perspective = 0.8;  
+
+        // --- STEP 2: DUAL-CORE COMPOSITION ---
+    float dist_sphere = length(vec2(x_raw, y_raw));
+    
+    // 1. The main outer event horizon mask (standard sharp boundary)
+    float horizon_size = 0.015; 
+    float core_mask = smoothstep(horizon_size, horizon_size + 0.01, dist_sphere);
+
+	/*
+    // 2. NEW: The inner absorption singularity dot
+    // This creates a secondary, tighter black core right in the center (size 0.02)
+    // and blends smoothly outward to fade the gas into pure black as it approaches
+    float absorption_dot = smoothstep(0.01, 0.02, dist_sphere);
+	*/
+
+    // 3. THE PERSPECTIVE DIVIDE MATRIX (For the gas disk only)
+    float z_factor = 1.0 - (y_raw * perspective);
+    float x = x_raw / z_factor;
+    float y = (y_raw / squash_y) / z_factor;
+
+    // 4. Calculate polar coordinates for the disk gas
+    float dist_disk = length(vec2(x, y));
+    float angle = atan(y, x);
+
+    // 1. Smoothly calculate Z-axis alignment using a squared wave
+    // Squaring removes the harsh 'abs()' angle transition, melting the invisible corner away!
+    float sin_a = sin(angle);
+    float z_axis_alignment = sin_a * sin_a;
+
+    // 2. Continuous frequency modifier that smoothly shifts across the disc
+    float steepness_factor = 1.0 - squash_y; 
+    float frequency_modifier = 1.0 - (z_axis_alignment * steepness_factor * 0.5);
+
+    // 3. Apply to the spiral calculation
+    float base_frequency = 12.0;
+    float spiral = sin((base_frequency * frequency_modifier * dist_disk) - angle * 3.0 + time * 5.0);
+
+
+
+            // 7. Create the Accretion Disk Gas Glow (Amplified)
+    float gas_glow = (0.12 / (dist_disk + 0.02)) * (0.4 + 0.6 * spiral);
+    
+    float core_bloom = 0.02 / (dist_sphere + 0.01);
+    vec3 gas_color = vec3(gas_glow * 2.5, gas_glow * 1.2, gas_glow * 0.2);
+    vec3 bloom_color = vec3(core_bloom * 1.5, core_bloom * 0.5, 0.0);
+    vec3 total_gas = gas_color + bloom_color;
+
+    // --- THE SPATIAL OVERLAP FIX ---
+    // Instead of cutting at a flat horizontal line (y_raw = 0), we look at 
+    // the distance from the back edge of the black hole sphere.
+    // This allows the front lip of the disk to naturally spill over the top 
+    // into the negative (upper) region of the screen as squash_y changes!
+    float back_edge_threshold = y_raw + horizon_size;
+    float front_mask = smoothstep(0.01, -0.01, back_edge_threshold);
+
+    // Combine masks: The gas behind the core gets blocked by core_mask,
+    // but the gas in front passes completely through, wrapping over both halves!
+    float final_gas_mask = mix(core_mask, 1.0, front_mask);
+
+    // Apply masks to capture the infinite void and rendering space
+    //vec3 final_color = total_gas * final_gas_mask * absorption_dot;
+    vec3 final_color = total_gas * final_gas_mask;
+
+
+    gl_FragColor = vec4(final_color, 1.0);
+}
+
+

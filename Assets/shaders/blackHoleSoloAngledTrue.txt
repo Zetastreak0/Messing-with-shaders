@@ -1,0 +1,75 @@
+#version 120
+
+uniform float time;
+uniform vec2 u_resolution;
+
+const float PI = 3.14159265;
+
+void main() {
+    // 1. Center the coordinates around (0,0) and correct for aspect ratio
+    float x_raw = (gl_FragCoord.x - (u_resolution.x * 0.5)) / u_resolution.y;
+    float y_raw = (gl_FragCoord.y - (u_resolution.y * 0.5)) / u_resolution.y;
+
+    // 2. Clear, Modular 3D Distortion Controls
+    float squash_y   = 0.12; 
+    float perspective = 0.8;  
+
+        // --- STEP 2: DUAL-CORE COMPOSITION ---
+    float dist_sphere = length(vec2(x_raw, y_raw));
+    
+    // 1. The main outer event horizon mask (standard sharp boundary)
+    float horizon_size = 0.02; 
+    float core_mask = smoothstep(horizon_size, horizon_size + 0.01, dist_sphere);
+
+	
+    // 2. NEW: The inner absorption singularity dot
+    // This creates a secondary, tighter black core right in the center (size 0.02)
+    // and blends smoothly outward to fade the gas into pure black as it approaches
+    float absorption_dot = smoothstep(0.01, 0.02, dist_sphere);
+	
+
+        // 3. THE DEPTH-SORT MATRIX (For the gas disk)
+    float z_factor = 1.0 - (y_raw * perspective);
+    float x = x_raw / z_factor;
+    float y = (y_raw / squash_y) / z_factor;
+
+    // 4. Calculate polar coordinates
+    float dist_disk = length(vec2(x, y));
+    float angle = atan(y, x);
+
+    // --- NEW: THE TRUE 3D DEPTH SORTING VECTOR ---
+    // We calculate a virtual distance from the camera to the disk plane.
+    // Gas at the bottom of the screen has a small depth (near), gas at the top has a large depth (far).
+    float pixel_depth = y_raw * sin(squash_y * PI * 0.5) + (1.0 - x_raw * x_raw * 0.1);
+
+    // 5. Generate the swirling spiral texture pattern
+    float sin_a = sin(angle);
+    float z_axis_alignment = sin_a * sin_a;
+    float steepness_factor = 1.0 - squash_y; 
+    float frequency_modifier = 1.0 - (z_axis_alignment * steepness_factor * 0.5);
+    
+    float base_frequency = 12.0;
+    float spiral = sin((base_frequency * frequency_modifier * dist_disk) - angle * 3.0 + time * 5.0);
+
+    // 6. Create the Accretion Disk Gas Glow
+    float gas_glow = (0.12 / (dist_disk + 0.02)) * (0.4 + 0.6 * spiral);
+    vec3 gas_color = vec3(gas_glow * 2.5, gas_glow * 1.2, gas_glow * 0.2);
+    
+    float core_bloom = 0.02 / (dist_sphere + 0.01);
+    vec3 bloom_color = vec3(core_bloom * 1.5, core_bloom * 0.5, 0.0);
+    vec3 total_gas = gas_color + bloom_color;
+
+    // --- NEW: BRANCHLESS DEPTH OVERLAP SEPARATOR ---
+    // If the pixel is evaluated as physically close to the camera (pixel_depth > 0.0),
+    // it automatically acts as a foreground layer that overrides background masks!
+    float foreground_weight = smoothstep(-0.1, 0.1, pixel_depth);
+    
+    // Foreground bands bypass the core block, while background bands get cut cleanly!
+    float final_gas_mask = mix(core_mask, 1.0, foreground_weight);
+
+    // Multiply by the masks and the inner absorption dot
+    vec3 final_color = total_gas * final_gas_mask * absorption_dot;
+
+    gl_FragColor = vec4(final_color, 1.0);
+}
+

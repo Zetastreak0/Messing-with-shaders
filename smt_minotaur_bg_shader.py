@@ -1,0 +1,137 @@
+import pygame
+from pygame.locals import *
+from OpenGL.GL import *
+import sys
+import time
+
+# Vertex Shader using classic built-in variables that every driver supports
+VERTEX_SHADER_SRC = """
+#version 120
+void main() {
+    gl_TexCoord[0] = gl_MultiTexCoord0;
+    gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
+}
+"""
+
+# Fragment Shader - Ported the advanced Minotaur math into the stable pipeline
+FRAGMENT_SHADER_SRC = """
+#version 120
+uniform float time;
+
+void main() {
+    // Translate texture coordinates to center space (-1.0 to 1.0)
+    // Works perfectly across all hardware architectures without calculation bugs
+    vec2 p = gl_TexCoord[0].xy * 2.0 - 1.0;
+    
+    // Scale for widescreen aspect ratio normalization
+    p.x *= 1.777; 
+    
+    float r = length(p);
+    float theta = atan(p.y, p.x);
+    
+    // --- LAYER 1: Deep Cosmic Purple & Blazing Orange Plasma Tunnel ---
+    float spiral1 = theta + 3.8 * log(r) - time * 1.2;
+    float plasma_wave = sin(spiral1 * 3.0) * 0.5 + 0.5;
+    plasma_wave += cos((theta - time * 0.7) * 2.0) * 0.25; 
+    
+    vec3 base_purple = vec3(0.35, 0.02, 0.45) * (0.8 / (r + 0.1));
+    vec3 flame_orange = vec3(1.0, 0.42, 0.08) * plasma_wave;
+    vec3 layer1 = mix(base_purple, flame_orange, plasma_wave * 0.85);
+    
+    // --- LAYER 2: Neon Cyan Electrical Ring Filaments ---
+    float spiral2 = theta - 5.5 * log(r) + time * 2.2;
+    
+    float spark_mask = abs(sin(spiral2 * 7.0 + sin(r * 25.0 - time * 8.0)));
+    float sparks = smoothstep(0.03, 0.0, spark_mask) * smoothstep(0.15, 0.4, r);
+    
+    // Blocky noise array replication mimicking 3DS native texture boundaries
+    float blocky_noise = sin(floor(theta * 20.0)) * cos(floor(r * 30.0));
+    if (blocky_noise > 0.3) {
+        sparks *= 1.4;
+    }
+    
+    vec3 layer2 = vec3(0.0, 0.85, 1.0) * sparks * 1.6;
+    
+    // --- COMPOSITING ---
+    vec3 final_color = layer1 + layer2;
+    
+    // Dense central black hole vignette
+    float inner_void = smoothstep(0.12, 0.38, r);
+    // Subtle edge screen vignette
+    float outer_vignette = smoothstep(1.8, 0.8, r);
+    
+    final_color *= inner_void * outer_vignette;
+    
+    // Color boost to simulate backlit display warmth
+    gl_FragColor = vec4(final_color * 1.3, 1.0);
+}
+"""
+
+def compile_shader(shader_type, source):
+    shader = glCreateShader(shader_type)
+    glShaderSource(shader, source)
+    glCompileShader(shader)
+    if not glGetShaderiv(shader, GL_COMPILE_STATUS):
+        raise RuntimeError(glGetShaderInfoLog(shader).decode('utf-8'))
+    return shader
+
+def init_shaders():
+    vs = compile_shader(GL_VERTEX_SHADER, VERTEX_SHADER_SRC)
+    fs = compile_shader(GL_FRAGMENT_SHADER, FRAGMENT_SHADER_SRC)
+    program = glCreateProgram()
+    glAttachShader(program, vs)
+    glAttachShader(program, fs)
+    glLinkProgram(program)
+    if not glGetProgramiv(program, GL_LINK_STATUS):
+        raise RuntimeError(glGetProgramInfoLog(program).decode('utf-8'))
+    return program
+
+def main():
+    pygame.init()
+    width, height = 960, 540
+    pygame.display.set_mode((width, height), DOUBLEBUF | OPENGL)
+    pygame.display.set_caption("SMT IV Minotaur Vortex Engine - Stable Build")
+    
+    program = init_shaders()
+    glUseProgram(program)
+    
+    time_loc = glGetUniformLocation(program, "time")
+    
+    # Configure the legacy viewports identically to script 1
+    glViewport(0, 0, width, height)
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    glOrtho(-1, 1, -1, 1, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+    
+    clock = pygame.time.Clock()
+    start_time = time.time()
+    
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
+                running = False
+                
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        
+        current_time = time.time() - start_time
+        glUniform1f(time_loc, current_time)
+        
+        # Uses standard Immediate Mode quad drawing just like script 1
+        glBegin(GL_QUADS)
+        glTexCoord2f(0.0, 0.0); glVertex2f(-1.0, -1.0)
+        glTexCoord2f(1.0, 0.0); glVertex2f( 1.0, -1.0)
+        glTexCoord2f(1.0, 1.0); glVertex2f( 1.0, 1.0)
+        glTexCoord2f(0.0, 1.0); glVertex2f(-1.0, 1.0)
+        glEnd()
+        
+        pygame.display.flip()
+        clock.tick(60)
+        
+    pygame.quit()
+    sys.exit()
+
+if __name__ == '__main__':
+    main()

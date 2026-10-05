@@ -1,0 +1,60 @@
+#version 120
+
+uniform float time;
+uniform vec2 u_resolution;
+
+void main(){
+	//1
+	float x = gl_FragCoord.x / u_resolution.x;
+	float y = (gl_FragCoord.y - (u_resolution.y * 0.5)) / u_resolution.y;
+
+	//2
+	float thickness = 0.15;
+	float head_x = 0.85;
+	float tail_x = 0.15;
+
+	//3
+	float y_ratio = y / thickness;
+	float cylinder_depth = sqrt(max(0.0, 1.0 - (y_ratio * y_ratio)));
+
+	float speed = time * -45.0;
+
+	float distorted_x = x / (cylinder_depth * 0.5 + 0.5);
+	float e_lines = sin(distorted_x * 40.0 + speed) * cos(y * 80.0);
+	float e_core = sin(distorted_x * 15.0 + speed * 0.5);
+	
+	//4
+	float e_wave = 0.5 + 0.5 * (e_lines * 0.7 + e_core * 0.3);
+
+	//5
+	float dist_from_center = abs(y);
+
+	float tail_dist = x - tail_x;
+
+	float head_radius = length(vec2(x - head_x, y * 1.5));
+
+	float tail_pinch = smoothstep(0.0, 0.15, tail_dist);
+	float head_cap = smoothstep(0.12, 0.10, head_radius);
+	float length_mask = smoothstep(tail_x, tail_x + 0.02, x) * smoothstep(head_x + 0.10, head_x, x);
+
+	float dynamic_thickness = thickness + (head_cap * 0.08);
+	float body_cylinder = smoothstep(dynamic_thickness, dynamic_thickness - 0.08, dist_from_center) * tail_pinch * length_mask;
+
+	//6
+	float beam_envelope = max(body_cylinder, head_cap);
+
+	//7
+	float core_cylinder = smoothstep(0.04, 0.0, dist_from_center) * length_mask;
+	float core_sphere = smoothstep(0.06, 0.0, head_radius);
+	float core_intensity = max(core_cylinder, core_sphere);	
+	float crackle = core_intensity * (0.6 + 0.4 * e_wave);
+
+	//8
+	vec3 outer_glow = vec3(0.1, 0.4, 1.0) * e_wave * beam_envelope;
+	vec3 inner_core = vec3(1.0, 1.0, 1.0)* crackle;
+
+	//9
+	vec3 final_color = outer_glow + inner_core;
+	float final_alpha = clamp(beam_envelope + crackle, 0.0, 1.0);
+	gl_FragColor = vec4(final_color, final_alpha);
+}

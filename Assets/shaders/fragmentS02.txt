@@ -1,0 +1,24 @@
+#version 120
+
+// Matches your python code's uniform query exactly
+uniform float time; 
+
+void main() {
+    // 1. Get coordinates from your glBegin(GL_QUADS) mapping (0.0 to 1.0)
+    vec2 uv = gl_TexCoord[0].xy;
+
+    // 2. Create moving wave patterns using sine and cosine over time
+    float waveX = sin(uv.x * 10.0 + time * 2.5);
+    float waveY = cos(uv.y * 10.0 + time * 1.8);
+    
+    // 3. Mix the waves to create an evolving abstract pattern
+    float pattern = sin((waveX + waveY) * 4.0);
+
+    // 4. Generate changing color channels based on the pattern and time
+    float r = 0.5 + 0.5 * sin(pattern + time);
+    float g = 0.5 + 0.5 * sin(pattern + time + 2.0);
+    float b = 0.5 + 0.5 * sin(pattern + time + 4.0);
+
+    // Output the final shifting color
+    gl_FragColor = vec4(r, g, b, 1.0);
+}

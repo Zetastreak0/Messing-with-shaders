@@ -1,0 +1,69 @@
+#version 120
+uniform float time;
+uniform vec2 u_resolution;
+const float PI = 3.14159265;
+const float LOOP_ROTATIONS = 2.0;
+const float LOOP_DURATION = 6.0;
+const float LOOP_VELOCITY = 0.33333333;
+void main(){
+	float u_pitch = 1.0;
+	float u_yaw = 0.4;
+	float u_fov = 1.5;
+	float radius = 0.45;
+
+	float x_raw = ((gl_FragCoord.x - (u_resolution.x * 0.5)) / u_resolution.y) * 1.5;
+	float y_raw = ((gl_FragCoord.y - (u_resolution.y * 0.5)) / u_resolution.y) * 1.5;
+
+
+	float x_rot = x_raw * cos(u_yaw) - y_raw * sin(u_yaw);
+	float y_rot = x_raw * sin(u_yaw) + y_raw * cos(u_yaw);
+
+	float depth_y = y_rot * cos(u_pitch);
+	float depth_z = y_rot * sin(u_pitch) + u_fov;
+
+	float x = x_rot / depth_z;
+	float y = depth_y / depth_z;
+
+	float theta = (2.0 * PI * LOOP_VELOCITY) * time;
+
+	float orbit_x = cos(theta) * radius;
+	float orbit_y = sin(theta) * radius;
+
+	// =========================================
+	// 4. CHANNELS FOR MOVING BLACK HOLE CENTERS
+	float X_move = (x - orbit_x) + (y / 2.0);
+	float Y_move = y - (0.333333 + orbit_y);
+
+	float black_hole_core = (X_move * X_move) + 6.0 * (Y_move * Y_move);
+
+	float B = 0.0;
+	float K = 0.0;
+
+	for (int s = 1; s <= 20; s++) {
+		float float_s = float(s);
+        
+
+		float spatial_wave = (4.0 * y + 2.0 * x) * 0.1;
+		float T_s = sin(spatial_wave + (time * 0.5) + float_s);
+        
+		float core_term = black_hole_core - (float_s / 20.0);
+		float A_s = exp(-50.0 * (T_s * T_s) - (core_term * core_term));
+        
+		B += A_s * sin(float_s * T_s);
+		K += A_s * cos(float_s * T_s);
+	}
+
+
+
+	float P = x + B;
+	float Q = y + K;
+	float U = 0.5 + 0.5 * sin(10.0 * (P * P + Q * Q));
+
+	vec3 space_color = vec3(U * 0.1, U * 0.2, U * 0.6);
+	vec3 core_glow = vec3(B * 2.0, 0.0, B * 1.5);
+	vec3 final_color = space_color + core_glow;
+
+	gl_FragColor = vec4(final_color, 1.0);
+	//gl_FragColor = vec4(0.0, 0.5, 1.0, 1.0); // Pure solid blue test line
+
+}
