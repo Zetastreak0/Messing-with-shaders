@@ -1,0 +1,68 @@
+#version 330 core
+
+// Super-flash style effect. Only uniforms: u_time, u_resolution.
+uniform float u_time;
+uniform vec2  u_resolution;
+
+out vec4 fragColor;
+
+#define PI 3.14159265
+const float LEN = 2.5;   // effect length in seconds (loops via mod)
+
+float hash(float n) { return fract(sin(n) * 43758.5453); }
+
+// 1D value noise that tiles every `period` cells (no seam around the angle)
+float tileNoise(float x, float period) {
+    float i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(hash(mod(i, period)), hash(mod(i + 1.0, period)), f);
+}
+
+// Stand-in backdrop since no texture is available yet.
+vec3 backdrop(vec2 uv) {
+    return vec3(0.25, 0.35, 0.55)
+         + 0.25 * cos(vec3(0.0, 2.0, 4.0) + uv.x * 3.0 + uv.y * 2.0 + u_time * 0.3);
+}
+
+void main() {
+    vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
+    vec2 p  = uv - vec2(0.0, 0.05);      // effect center
+    float r = length(p);
+    float a = atan(p.y, p.x);
+    float t = mod(u_time, LEN);
+
+    // 1) Shockwave ring that also refracts the scene
+    float ringR = t * 1.4;
+    float ring  = exp(-pow((r - ringR) / 0.04, 2.0));
+    vec2 warped = uv + normalize(p + 1e-5) * ring * 0.04;
+    vec3 scene  = backdrop(warped);
+
+    // 2) Darken + desaturate after the initial flash
+    float k   = smoothstep(0.0, 0.15, t);
+    float lum = dot(scene, vec3(0.299, 0.587, 0.114));
+    vec3 col  = mix(scene, vec3(lum) * 0.25, k);
+
+    // 3) Radial speed lines, re-randomized at 12 fps
+    float frame = floor(u_time * 12.0);
+    float ang   = a / (2.0 * PI) * 40.0;
+    float n     = tileNoise(ang + frame * 7.3, 40.0);
+    float lines = smoothstep(0.70, 0.90, n) * smoothstep(0.15, 0.70, r) * k;
+    col = mix(col, vec3(1.0, 0.15, 0.2), lines * 0.9);
+
+    // 4) Ring highlight
+    col += ring * vec3(1.0, 0.8, 0.8);
+
+    // 5) Initial white flash
+    col += vec3(exp(-t * 14.0));
+
+    // 6) Vignette
+    col *= 1.0 - 0.5 * smoothstep(0.4, 1.0, r) * k;
+
+    // 7) Fade back to the untouched scene at the end of the loop
+    float fade = 1.0 - smoothstep(LEN - 0.4, LEN, t);
+    col = mix(backdrop(uv), col, fade);
+
+
+    //fragColor = vec4(vec3(fract(u_time)), 1.0);
+    fragColor = vec4(col, 1.0);
+}

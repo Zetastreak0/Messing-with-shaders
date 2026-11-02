@@ -1,0 +1,334 @@
+#version 330 core
+// =====================================================================
+//  "Distortion super" flash, BlazBlue: Central Fiction style
+//
+//  Inputs from the main program:  u_time (seconds), u_resolution (pixels)
+//  Optional: uncomment `#define USE_SCENE_TEX` and bind your rendered game
+//  background to the sampler u_scene. Without it, a fake stage is drawn.
+//
+//  u_time = 0 is the first frame of the effect, so pass "seconds since the
+//  super was triggered". The animation is about 0.6 s long and then holds on
+//  its last look (set LOOP to true below to preview it on repeat instead).
+// =====================================================================
+
+// #define USE_SCENE_TEX
+#define USE_EMBLEM_TEX        // use a PNG for the emblem (bind it to u_emblem) instead of the procedural one
+// #define DEBUG_EMBLEM          // shows only the emblem layer (for tweaking)
+
+uniform float u_time;
+uniform vec2  u_resolution;
+#ifdef USE_SCENE_TEX
+uniform sampler2D u_scene;
+#endif
+
+#ifdef USE_EMBLEM_TEX
+uniform sampler2D u_emblem;
+#endif
+
+out vec4 fragColor;
+
+#define PI  3.14159265
+#define TAU 6.28318531
+
+// ----------------------------- tweakables -----------------------------
+// Centre of the ring / emblem. Units: 1.0 = screen height, (0,0) = middle
+// of the screen, +y is up. This is roughly the character's chest.
+//const vec2  CENTER   = vec2(-0.333, -0.10);
+const vec2  CENTER   = vec2(0, 0);
+const float SCALE    = 0.4;    // size of the whole effect: 1.0 = as in the reference, 1.5 = 50% bigger
+const float ANIM_FPS = 30.0;   // flicker/shuffle rate of rays, ticks, shards
+const bool  LOOP     = true;  // false: play once, then hold. true: replay forever (preview)
+const float LOOP_LEN = 1.8;    // seconds per loop when LOOP is on
+const float PRE_ROLL = 0.20;   // seconds of "no effect" at the start of each loop
+
+// ------------------------------ helpers -------------------------------
+float hash11(float n) { return fract(sin(n * 127.1) * 43758.5453); }
+float hash21(vec2 p)  { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+vec2  hash22(vec2 p)  {
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(p) * 43758.5453);
+}
+float vnoise(vec2 p) {                     // smooth 2D value noise
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(i),               hash21(i + vec2(1, 0)), f.x),
+               mix(hash21(i + vec2(0, 1)),  hash21(i + vec2(1, 1)), f.x), f.y);
+}
+float fbm(vec2 p) {                        // layered noise
+    float a = 0.5, s = 0.0;
+    for (int i = 0; i < 5; i++) { s += a * vnoise(p); p = p * 2.03 + vec2(17.1, 9.2); a *= 0.5; }
+    return s;
+}
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
+
+// Voronoi: returns (distance to nearest point, distance to 2nd nearest, cell id)
+vec4 voronoi(vec2 x) {
+    vec2 n = floor(x), f = fract(x);
+    float d1 = 8.0, d2 = 8.0; vec2 best = vec2(0.0);
+    for (int j = -1; j <= 1; j++)
+    for (int i = -1; i <= 1; i++) {
+        vec2 g = vec2(float(i), float(j));
+        vec2 o = hash22(n + g);
+        vec2 d = g + o - f;
+        float dd = dot(d, d);
+        if (dd < d1) { d2 = d1; d1 = dd; best = n + g; }
+        else if (dd < d2) { d2 = dd; }
+    }
+    return vec4(sqrt(d1), sqrt(d2), best);
+}
+
+// ---------------------------- the "scene" -----------------------------
+// The thing the effect is applied on top of. With a texture bound this is
+// your game frame; otherwise a made-up stage so the effect can be seen.
+vec3 sceneColor(vec2 uv) {
+#ifdef USE_SCENE_TEX
+    vec2 tc = uv * vec2(u_resolution.y / u_resolution.x, 1.0) + 0.5;
+    return textureLod(u_scene, clamp(tc, 0.001, 0.999), 0.0).rgb;
+#else
+    float y = uv.y;
+    vec3 sky   = mix(vec3(0.05, 0.07, 0.16), vec3(0.13, 0.17, 0.32), smoothstep(-0.2, 0.5, y));
+    vec3 floor_ = mix(vec3(0.40, 0.26, 0.14), vec3(0.12, 0.08, 0.06), smoothstep(-0.5, -0.25, y));
+    vec3 c = mix(floor_, sky, smoothstep(-0.30, -0.24, y));
+    float pillar = step(0.55, fract(uv.x * 2.1)) * smoothstep(-0.27, -0.22, y);
+    c = mix(c, c * 0.45 + vec3(0.04, 0.04, 0.06), pillar * 0.7);
+    c += vec3(1.0, 0.70, 0.20) * exp(-pow(length(uv - vec2(0.35, 0.28)) / 0.05, 2.0));
+    c += vec3(0.1, 0.9, 0.3) * 0.5 * exp(-pow(length(uv - vec2(0.38, -0.02)) / 0.25, 2.0));
+    return c;
+#endif
+}
+
+#ifdef USE_EMBLEM_TEX
+// Emblem from a PNG. The image is centred on the ring and covers
+// q = -EMBLEM_EXTENT .. +EMBLEM_EXTENT in both directions (1.0 = ring radius),
+// so raise EMBLEM_EXTENT to shrink the emblem and lower it to enlarge it.
+const float EMBLEM_EXTENT    = 1.3;
+const bool  EMBLEM_USE_ALPHA = true;     // true: use the PNG's alpha. false: use brightness (white on black)
+float emblemTex(vec2 q) {
+    vec2 tc = vec2(q.x, -q.y) / (2.0 * EMBLEM_EXTENT) + 0.5;      // -q.y: PNG row 0 is the top
+    if (any(lessThan(tc, vec2(0.0))) || any(greaterThan(tc, vec2(1.0)))) return 0.0;
+    vec4 c = textureLod(u_emblem, tc, 0.0);
+    return EMBLEM_USE_ALPHA ? c.a : dot(c.rgb, vec3(0.3333));
+}
+#endif
+
+// ------------------------------ emblem --------------------------------
+// One tapering curved blade: a quadratic Bezier a->b->c whose width shrinks
+// to a point at the tip. Returns 1 inside the blade, 0 outside (soft edge).
+// The curve is approximated by 8 straight pieces; we keep the closest one.
+float blade(vec2 p, vec2 a, vec2 b, vec2 c, float w0) {
+    float d = 1e9, sb = 0.0;
+    vec2 prev = a;
+    for (int i = 1; i <= 8; i++) {
+        float s   = float(i) / 8.0;
+        vec2  cur = mix(mix(a, b, s), mix(b, c, s), s);
+        vec2  pa = p - prev, ba = cur - prev;
+        float h  = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+        float di = length(pa - ba * h);
+        if (di < d) { d = di; sb = (float(i - 1) + h) / 8.0; }     // sb = how far along the blade (0..1)
+        prev = cur;
+    }
+    return 1.0 - smoothstep(-0.004, 0.012, d - w0 * (1.0 - sb));   // width falls to 0 at the tip
+}
+
+// The big mirror-symmetric tribal crest. In the game it is a drawn sprite;
+// here it is built from curved blades (mirrored left/right), thin parallel
+// "filigree" lines, a sawtooth band along the bottom and a small round sigil.
+// q is in units of the emblem radius (1.0 ~ edge of the ring).
+float emblem(vec2 q) {
+    float r = length(q);
+    if (r > 1.75) return 0.0;
+    q.x = abs(q.x);                                   // mirror: only draw the right half
+    float m = 0.0;
+    // upper fan: blades that sweep up and outward
+    m = max(m, blade(q, vec2(0.12, 0.15), vec2(0.20, 0.85), vec2(0.62, 1.30), 0.034));
+    m = max(m, blade(q, vec2(0.15, 0.12), vec2(0.55, 0.70), vec2(0.95, 1.00), 0.034));
+    m = max(m, blade(q, vec2(0.18, 0.08), vec2(0.85, 0.35), vec2(1.20, 0.85), 0.031));
+    m = max(m, blade(q, vec2(0.18, 0.02), vec2(0.95, 0.05), vec2(1.30, 0.45), 0.029));
+    // lower fan: blades that sweep out and down, tips flicking back up
+    m = max(m, blade(q, vec2(0.18,-0.05), vec2(0.95,-0.20), vec2(1.28, 0.05), 0.029));
+    m = max(m, blade(q, vec2(0.18,-0.12), vec2(0.85,-0.50), vec2(1.18,-0.35), 0.029));
+    m = max(m, blade(q, vec2(0.14,-0.20), vec2(0.50,-0.80), vec2(0.95,-0.98), 0.031));
+    m = max(m, blade(q, vec2(0.10,-0.25), vec2(0.25,-0.85), vec2(0.55,-1.20), 0.027));
+    // tall centre spikes (up and down)
+    m = max(m, blade(q, vec2(0.03, 0.26), vec2(0.04, 0.80), vec2(0.03, 1.35), 0.030));
+    m = max(m, blade(q, vec2(0.03,-0.26), vec2(0.05,-0.70), vec2(0.04,-1.15), 0.028));
+    // outer crescents and curls to fill out the wings
+    m = max(m, blade(q, vec2(0.35, 0.60), vec2(1.05, 0.95), vec2(1.35, 0.30), 0.049));
+    m = max(m, blade(q, vec2(0.30,-0.40), vec2(1.00,-0.75), vec2(1.25,-0.15), 0.044));
+    m = max(m, blade(q, vec2(0.45, 0.25), vec2(0.85, 0.55), vec2(0.95, 0.20), 0.026));
+    m = max(m, blade(q, vec2(0.45,-0.20), vec2(0.85,-0.50), vec2(0.95,-0.15), 0.026));
+    m = max(m, blade(q, vec2(0.12, 0.50), vec2(0.10, 0.90), vec2(0.30, 1.20), 0.017));
+    m = max(m, blade(q, vec2(0.08,-0.50), vec2(0.20,-0.90), vec2(0.12,-1.25), 0.017));
+    // thin filigree lines running alongside the big blades
+    m = max(m, blade(q, vec2(0.20, 0.20), vec2(0.30, 0.98), vec2(0.90, 1.06), 0.012));
+    m = max(m, blade(q, vec2(0.24, 0.30), vec2(0.64, 0.66), vec2(1.15, 0.64), 0.011));
+    m = max(m, blade(q, vec2(0.26, 0.04), vec2(0.78, 0.14), vec2(1.28,-0.10), 0.010));
+    m = max(m, blade(q, vec2(0.24,-0.14), vec2(0.74,-0.40), vec2(1.18,-0.80), 0.010));
+    m = max(m, blade(q, vec2(0.18,-0.30), vec2(0.50,-0.80), vec2(0.88,-1.12), 0.011));
+    // curly filigree: contour lines of warped noise (thin because we only keep values near 0.5)
+    vec2  w2 = q + 0.25 * vec2(fbm(q * 2.4 + 3.1), fbm(q * 2.4 + 7.7)) - 0.12;
+    float ln = 1.0 - smoothstep(0.0, 0.018, abs(fbm(w2 * 3.0) - 0.5));
+    m = max(m, ln * (1.0 - smoothstep(0.80, 1.10, r)) * step(0.24, r) * 0.85);
+    // sawtooth band just outside the ring, mostly along the bottom
+    float saw  = abs(fract(atan(q.x, q.y) / TAU * 44.0) - 0.5) * 2.0;           // triangle wave 0..1
+    float band = smoothstep(0.0, 0.02, r - 1.03) * (1.0 - smoothstep(0.0, 0.02, r - (1.03 + 0.20 * (1.0 - saw))));
+    m = max(m, band * (1.0 - smoothstep(-0.55, 0.15, q.y)));
+    // small round sigil in the centre: two rings, the outer one dashed
+    float sg = (1.0 - smoothstep(0.0, 0.012, abs(r - 0.15)))
+             + (1.0 - smoothstep(0.0, 0.010, abs(r - 0.21))) * step(0.5, fract(atan(q.y, q.x) / TAU * 36.0));
+    m = max(m, sg * 0.9);
+    return clamp(m, 0.0, 1.0);
+}
+
+// -------------------------------- rays --------------------------------
+// A handful of long tapering white-blue beams. Directions, origins and
+// lengths re-roll every other animation frame (that jumpy feel).
+vec3 rays(vec2 p, float fr) {
+    vec3 acc = vec3(0.0);
+    float tick2 = floor(fr * 0.5);
+    for (int i = 0; i < 7; i++) {
+        float fi   = float(i);
+        float seed = fi * 13.37 + tick2 * 3.1;
+        float th   = hash11(seed) * TAU;
+        vec2  dir  = vec2(cos(th), sin(th));
+        vec2  pp   = p - (hash22(vec2(seed, 1.3)) - 0.5) * 0.4;     // beams don't all start at the exact centre
+        float along = dot(pp, dir);
+        float perp  = abs(dot(pp, vec2(-dir.y, dir.x)));
+        float w     = 0.006 + 0.07 * max(along, 0.0);               // wedge that widens outward
+        float len   = 0.7 + 1.4 * hash11(seed + 2.2);
+        float fall  = smoothstep(0.05, 0.3, along) * (1.0 - smoothstep(len * 0.35, len, along));
+        float core  = exp(-pow(perp / w, 2.0));
+        float glow  = exp(-pow(perp / (w * 3.0), 2.0)) * 0.40;
+        vec3  c = mix(vec3(0.30, 0.50, 1.00), vec3(1.0), exp(-pow(perp / (w * 0.4), 2.0)));
+        acc += (core * c + glow * vec3(0.4, 0.55, 1.0)) * fall * (0.35 + 0.65 * hash11(seed + 5.5));
+    }
+    return acc;
+}
+
+// ------------------------------- main ---------------------------------
+void main() {
+    vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
+
+    // ---- 0. clock ---------------------------------------------------
+    float t = u_time;
+    float fadeOut = 1.0;
+    if (LOOP) {
+        t = mod(u_time, LOOP_LEN) - PRE_ROLL;
+        fadeOut = 1.0 - smoothstep(LOOP_LEN - PRE_ROLL - 0.25, LOOP_LEN - PRE_ROLL, t);
+    }
+    vec3 plain = sceneColor(uv);
+    if (t <= 0.0) { fragColor = vec4(plain, 1.0); return; }
+    float fr = floor(t * ANIM_FPS);                 // stepped "animation frame" counter
+
+    vec2  p   = (uv - CENTER) / SCALE;                        // position relative to ring centre
+    float r   = length(p);
+    float ang = atan(p.y, p.x);
+
+    // ---- 1. timeline: ring radius and the "phase" ramps ----------------
+    // The ring pops from nothing to ~0.4 in one frame, then eases outward.
+    float R = mix(0.05, 0.405, smoothstep(0.07, 0.10, t))
+            + 0.12 * (1.0 - exp(-max(t - 0.10, 0.0) / 0.12));
+    float ringOn = smoothstep(0.075, 0.095, t);
+    float kBlack = smoothstep(0.12, 0.20, t);       // interior goes from blue to black
+    float kWhite = smoothstep(0.20, 0.34, t);       // emblem goes from blue to white
+
+    // ---- 2. sample the scene (with refraction + shattering) ------------
+    float bump = exp(-pow((r - R * 1.05) / 0.06, 2.0)) * ringOn * (1.0 - smoothstep(0.2, 0.4, t));
+    vec2  suv  = uv + normalize(p + 1e-5) * bump * 0.035;     // push pixels outward near the ring
+    vec3  scn  = sceneColor(suv);
+
+    float shMove = smoothstep(0.08, 0.34, t);                 // how far the shards have flown
+    float shMask = smoothstep(R * 0.95, R * 1.4, r)           // only outside the ring
+                 * (0.3 + 0.7 * smoothstep(-0.45, 0.5, uv.x)) // mostly on the far (right) side
+                 * smoothstep(0.08, 0.14, t);
+    if (shMask > 0.001) {
+        const float CELLS = 7.0;
+        vec4  v   = voronoi(uv * CELLS);
+        vec2  id  = v.zw;
+        vec2  h   = hash22(id);
+        vec2  cc  = (id + h) / CELLS;                          // cell centre in uv space
+        vec2  dir = normalize(cc - CENTER + 1e-5);
+        vec2  mv  = dir * (0.10 + 0.35 * h.x) * shMove + (hash22(id + 7.7) - 0.5) * 0.14 * shMove;
+        float ra  = (h.y - 0.5) * 2.2 * shMove;                // each shard rotates a bit
+        vec2  su  = cc + rot(ra) * (uv - cc) - mv;             // sample from where the piece "came from"
+        float shade = mix(1.0, 0.75 + 0.25 * h.y, shMove);     // random per-shard darkening
+        float edge  = smoothstep(0.0, 0.05, v.y - v.x);        // dark cracks between shards
+        vec3  shard = sceneColor(su) * shade * mix(0.35, 1.0, edge);
+        scn = mix(scn, shard, shMask);
+    }
+
+    // ---- 3. outside vs inside the ring --------------------------------
+    float inside = 1.0 - smoothstep(R - 0.004, R + 0.004, r);
+
+    float dk = mix(1.0, 0.80, smoothstep(0.07, 0.22, t));     // scene darkens outside the ring
+    vec3 outCol = scn * dk;
+    outCol *= mix(vec3(1.0), vec3(0.75, 0.8, 1.0), smoothstep(0.07, 0.2, t) * exp(-max(r - R, 0.0) / 0.5)); // cool tint near ring
+    outCol += vec3(0.05, 0.08, 0.45) * exp(-max(r - R, 0.0) / 0.2) * smoothstep(0.05, 0.12, t) * 0.7;
+
+    // inside: starts as the scene seen through blue glass, then goes black
+    float lum = dot(scn, vec3(0.299, 0.587, 0.114));
+    vec3 blueScene = mix(vec3(0.05, 0.08, 1.00) * (0.85 + 1.2 * lum), scn * vec3(0.6, 0.7, 1.3), 0.35);
+    float blot = smoothstep(0.50, 0.68, fbm(p * 7.0 + vec2(0.0, fr * 0.3)));
+    blueScene = mix(blueScene, vec3(0.0, 0.0, 0.12), blot * 0.6 * smoothstep(0.10, 0.15, t));
+    vec3 inCol = mix(blueScene, vec3(0.0, 0.0, 0.025), kBlack);
+
+    vec3 col = mix(outCol, inCol, inside * ringOn);
+
+    // ---- 4. swirling blue energy (first frames, only near the character) -
+    float swAmt = smoothstep(0.0, 0.03, t) * (1.0 - smoothstep(0.13, 0.26, t));
+    float near  = exp(-pow(r / 0.45, 2.0));
+    vec2  wp    = p * 5.0 + vec2(0.0, -t * 14.0);               // coordinates that scroll upward over time
+    float wisp  = smoothstep(0.58, 0.80, fbm(wp + 4.0 * fbm(wp * 0.7)));   // irregular blue tongues
+    col  = mix(col, col * vec3(0.45, 0.55, 1.0), swAmt * 0.55 * near);
+    col += vec3(0.04, 0.08, 0.55) * swAmt * near * 0.7;                        // blue glow          // blue-dark tint
+    col += vec3(0.15, 0.25, 1.00) * wisp * swAmt * near * 2.2;                 // the wisps themselves
+
+    // ---- 5. the emblem -------------------------------------------------
+    float es = 0.80 + 0.50 * (1.0 - exp(-max(t - 0.10, 0.0) / 0.20));        // emblem grows
+    vec2  q  = p / (R * es);
+    float E  = 0.0;
+#ifdef USE_EMBLEM_TEX
+    if (t > 0.09) E = emblemTex(q);
+#else
+    if (t > 0.09) E = emblem(q) * (1.0 - smoothstep(1.2, 1.55, length(q)));
+#endif
+#ifdef DEBUG_EMBLEM
+    fragColor = vec4(vec3(E), 1.0); return;
+#endif
+    float neg = 1.0 - smoothstep(0.12, 0.17, t);                               // early: dark emblem shapes
+    col = mix(col, col * 0.15, E * neg * inside * 0.75 * smoothstep(0.09, 0.12, t));
+    vec3 emCol = mix(vec3(0.42, 0.45, 1.00), vec3(0.88, 0.93, 1.00), kWhite);
+    col += emCol * E * smoothstep(0.13, 0.19, t) * (0.80 + 0.20 * kWhite);
+
+    // ---- 6. the ring: soft white haze first, then crisp rainbow ticks ---
+    float soft = 1.0 - smoothstep(0.10, 0.15, t);                             // first frames: blurry bubble
+    float haze = pow(clamp((r - (R - 0.20)) / 0.20, 0.0, 1.0), 2.0) * inside;
+    col += haze * vec3(0.80, 0.72, 1.0) * (0.10 + 0.95 * soft) * ringOn;
+    col += vec3(0.75, 0.70, 1.0) * exp(-max(r - R, 0.0) / 0.03) * (1.0 - inside) * soft * 0.55 * ringOn;
+
+    float RW = 0.072;                                                         // ring thickness
+    float u  = clamp((R - r) / RW, 0.0, 1.0);                                 // 0 outer edge .. 1 inner edge
+    float inBand = step(0.0, R - r) * (1.0 - step(1.0, (R - r) / RW));
+    float tk   = ang / TAU * 110.0 + t * 2.0;                                 // tick index around the ring
+    float s    = fract(tk);
+    float tick = smoothstep(0.0, 0.25, s) * (1.0 - smoothstep(0.65, 0.90, s));  // one tick = a soft-edged bar
+    float len  = 0.65 + 0.35 * hash11(floor(tk) + floor(fr / 3.0));           // each tick has its own length
+    tick *= 1.0 - smoothstep(len - 0.25, len, u);
+    tick = mix(tick, 0.55, soft * 0.6);                                       // blurrier at first
+    vec3 tickCol = mix(vec3(1.00, 0.40, 0.95), vec3(0.66, 0.86, 0.14), smoothstep(0.25, 0.75, u));
+    tickCol = mix(tickCol, vec3(0.95, 0.85, 1.0), soft * 0.5);
+    col *= 1.0 - inBand * (1.0 - tick) * 0.5 * ringOn;                        // dark gaps between ticks
+    col  = mix(col, tickCol * (1.25 - 0.55 * u), tick * inBand * ringOn);     // opaque ticks over the emblem
+    col += vec3(1.0, 0.85, 1.0) * exp(-pow((R - r) / 0.010, 2.0)) * (0.15 + 0.5 * soft) * ringOn;  // rim glint
+
+    // faint lavender arc just outside = the edge of the distortion lens
+    col += vec3(0.50, 0.42, 1.00) * exp(-pow((r - R * 1.38) / 0.010, 2.0)) * 0.30 * smoothstep(0.10, 0.15, t);
+
+    // ---- 7. light rays -------------------------------------------------
+    float rayAmt = smoothstep(0.09, 0.13, t) * (1.0 - 0.45 * smoothstep(0.35, 0.60, t));
+    col += rays(p, fr) * rayAmt * 1.1;
+
+    // ---- 8. finish -----------------------------------------------------
+    col = mix(plain, col, fadeOut);
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}

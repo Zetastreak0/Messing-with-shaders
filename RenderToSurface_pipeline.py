@@ -10,6 +10,8 @@ shaderDict = {"V":None,
              "F":{}}
 activeSh = None
 directory = "Assets/shaders/"
+image_path = "Assets/images/"
+texture_count = 0
 
 def compile_shader(shader_type, source):
     shader = glCreateShader(shader_type)
@@ -49,7 +51,20 @@ def init_shaders():
             else:
                 fs = compile_shader(GL_FRAGMENT_SHADER, sh)
                 shaderDict["F"][shader[0:-4]] = [linkFSVS(fs, shaderDict["V"]), time.time()]
-                
+
+def init_texture(texture):
+    image = pygame.image.load(image_path + texture + ".png").convert_alpha()
+    w, h = image.get_size()
+
+    print(image.get_at((0, 0)))   # a corner pixel; the last number (alpha) should be 0
+    img_tex = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, img_tex)
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pygame.image.tostring(image, "RGBA", False))
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+
+    return img_tex
 
 def change_active(target):
     if target in shaderDict["F"]:
@@ -67,6 +82,7 @@ def check():
     res_loc = glGetUniformLocation(prog, "u_resolution")
     print(f"Time loc: {time_loc}, Res loc: {res_loc}") # Both should be 0 or greater
 
+    print(f"emblem {glGetUniformLocation(prog, "u_emblem")}")
 
 
 def set_viewport(width, height, matrix = False):
@@ -89,7 +105,7 @@ def unset_matrix(width, height):
     glLoadIdentity()
 
 
-def update_shaders(width, height, active = False):
+def update_shaders(width, height, texture = None, active = False):
     if active:
         if shaderDict["F"] is not None and shaderDict["F"][activeSh] is not None:
             #setup and shader update=========================
@@ -97,12 +113,20 @@ def update_shaders(width, height, active = False):
             set_matrix()
             glEnable(GL_TEXTURE_2D)
             glBindTexture(GL_TEXTURE_2D, 0)
-            program, loc = shaderDict["F"][activeSh][0]
-            glUseProgram(program)
-            glUniform1f(loc, time.time() - shaderDict["F"][activeSh][1])
             
+            program, _ = shaderDict["F"][activeSh][0]
+            glUseProgram(program)
+            
+            time_loc = glGetUniformLocation(program, "time")
             res_loc = glGetUniformLocation(program, "u_resolution")
+            glUniform1f(time_loc, float(time.time() - shaderDict["F"][activeSh][1]))
             glUniform2f(res_loc, float(width), float(height))
+
+            if texture != None:
+                glActiveTexture(GL_TEXTURE1)
+                glBindTexture(GL_TEXTURE_2D, texture)
+                glUniform1i(glGetUniformLocation(program, "u_emblem"), 1)   # the unit number (1), not the texture id
+
 
             glBegin(GL_QUADS)
             glTexCoord2f(0.0, 0.0); glVertex2f(-1.0, -1.0)

@@ -21,7 +21,9 @@ done = False
 
 
 init_shaders()
-change_active("blackHoleSoloAngledTrue")
+img_tex = None
+#img_tex = init_texture("Ragna")
+change_active("myShader")
 set_viewport(size[0], size[1])
 tex_id = None
 
@@ -67,7 +69,7 @@ while not done:
     overlay.fill((0,0,0,0))
     overlay.blit(player, playerrect.topleft)
 
-    update_shaders(size[0], size[1], True)
+    update_shaders(size[0], size[1], texture = img_tex, active = True)
     tex_id = update_layers(overlay, tex_id)
     
     pygame.display.flip()
